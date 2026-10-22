@@ -34,6 +34,7 @@ ul{list-style:none;margin:0;padding:0}
 .wish img,.thumb{width:92px;height:92px;object-fit:cover;border-radius:10px;border:1px solid var(--line);margin-top:6px}
 .wish a{color:var(--grn)}
 .plain li{display:flex;justify-content:space-between;padding:6px 0;border-top:1px solid var(--line)}
+input[type=checkbox]{display:inline;width:auto;margin:0 8px 0 0}
 code{display:block;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);overflow-wrap:anywhere;user-select:all;font-size:.85rem;margin-bottom:8px}
 #msg{min-height:1.4em;color:var(--acc);font-weight:600}
 </style>
@@ -51,13 +52,37 @@ const FIREBASE_CONFIG={  apiKey: "AIzaSyBorKTzz6zH7Nt46MlL7X2i8pfAezMM7us",
   storageBucket: "amigo-invisible-b6399.firebasestorage.app",
   messagingSenderId: "1050140499363",
   appId: "1:1050140499363:web:57be6fb247c90a90168e16"
-};
-/* ================================================================================================= */
+};/* ================================================================================================= */
 const app=document.getElementById("app"),$=s=>document.querySelector(s);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const slug=n=>n.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
 let db=null,user=null,org=false,nodb=false,view="login",me=null,reveal=false,armed=null,img=null,grace=0;
+let cfg={};
 let gid="",P="",grp=null,bad=false,isRoot=false,auth=null,groups=[];
+function solve(ids,k,bad,avoid){
+  const n=ids.length,rnd=m=>Math.floor(Math.random()*m),key=(a,b)=>a<b?a+"|"+b:b+"|"+a,ok=(a,b)=>a!==b&&!bad.has(key(a,b));
+  const sh=a=>{for(let i=a.length-1;i>0;i--){const j=rnd(i+1);[a[i],a[j]]=[a[j],a[i]]}return a};
+  const N=2*n+2,S=0,T=N-1,c=Array.from({length:N},()=>new Array(N).fill(0));
+  for(let i=0;i<n;i++){c[S][1+i]=k;c[1+n+i][T]=k;for(let j=0;j<n;j++)if(ok(ids[i],ids[j]))c[1+i][1+n+j]=1}
+  const ord=sh([...Array(N).keys()]);
+  const dfs=(u,seen)=>{if(u===T)return true;seen[u]=1;for(const v of ord)if(!seen[v]&&c[u][v]>0&&dfs(v,seen)){c[u][v]--;c[v][u]++;return true}return false};
+  let flow=0;while(flow<n*k&&dfs(S,[]))flow++;
+  if(flow<n*k)return null;
+  const R=ids.map((_,i)=>{const t=new Set();for(let j=0;j<n;j++)if(c[1+n+j][1+i]>0)t.add(j);return t});
+  const cost=()=>{let t=0;R.forEach((q,i)=>q.forEach(j=>{if(R[j].has(i))t++}));return t};
+  const pick=q=>[...q][rnd(q.size)];
+  let cur=avoid?cost():0;
+  for(let t=0;t<6000;t++){
+    const a=rnd(n),b=rnd(n);if(a===b)continue;
+    const x=pick(R[a]),y=pick(R[b]);
+    if(x===y||R[a].has(y)||R[b].has(x)||!ok(ids[a],ids[y])||!ok(ids[b],ids[x]))continue;
+    R[a].delete(x);R[b].delete(y);R[a].add(y);R[b].add(x);
+    const nc=avoid?cost():0;
+    if(nc>cur){R[a].delete(y);R[b].delete(x);R[a].add(x);R[b].add(y)}else cur=nc;
+  }
+  return{pairs:Object.fromEntries(ids.map((id,i)=>[id,[...R[i]].map(j=>ids[j])])),cross:cur/2};
+}
+const saveCfg=o=>db.doc(P+"draw/config").set({...cfg,...o});
 const code=()=>{const b=new Uint8Array(12);crypto.getRandomValues(b);return[...b].map(x=>(x%36).toString(36)).join("")};
 let members={},wishes=[],sorteo=null,ld={m:0,w:0,d:0};
 const save=()=>{try{me?localStorage.setItem("ai.me."+gid,me):localStorage.removeItem("ai.me."+gid)}catch(e){}};
@@ -109,16 +134,24 @@ function listHtml(){
 }
 function friendHtml(){
   if(!sorteo)return`<div class="card"><p>Todavía no se ha hecho el sorteo. Cuando el organizador lo haga, podrás descubrir aquí a quién le regalas.</p></div>`;
-  const r=sorteo.pairs&&sorteo.pairs[me];
-  if(!r||!members[r])return`<div class="card"><p>No apareces en el sorteo (quizá te creaste el usuario después de hacerlo). Habla con el organizador.</p></div>`;
-  if(!reveal)return`<div class="card center"><p>Tu amigo invisible te está esperando…</p><button class="pri" data-a="reveal">Descubrir a quién le regalo</button><p class="muted">Asegúrate de que nadie mira tu pantalla 👀</p></div>`;
-  const ws=wishesOf(r);
-  return`<div class="card center"><p class="muted">Tienes que regalarle a</p><h2 class="big">${esc(members[r].name)}</h2><button class="link" data-a="hide">Ocultar</button></div><section class="card"><h3>Lo que le haría ilusión</h3>${ws.length?`<ul>${ws.map(wishHtml).join("")}</ul>`:`<p class="muted">Todavía no ha añadido nada. Vuelve a mirar más tarde.</p>`}</section>`;
+  const rs=[].concat(sorteo.pairs&&sorteo.pairs[me]||[]).filter(r=>members[r]);
+  if(!rs.length)return`<div class="card"><p>No apareces en el sorteo (quizá te creaste el usuario después de hacerlo). Habla con el organizador.</p></div>`;
+  if(!reveal)return`<div class="card center"><p>Tienes ${rs.length} amigo${rs.length>1?"s invisibles esperándote":" invisible esperándote"}…</p><button class="pri" data-a="reveal">Descubrir a quién le regalo</button><p class="muted">Asegúrate de que nadie mira tu pantalla 👀</p></div>`;
+  return`<div class="card center"><p class="muted">Tienes que regalar a</p>${rs.map(r=>`<h2 class="big">${esc(members[r].name)}</h2>`).join("")}<button class="link" data-a="hide">Ocultar</button></div>`+rs.map(r=>{const ws=wishesOf(r);return`<section class="card"><h3>Lo que le haría ilusión a ${esc(members[r].name)}</h3>${ws.length?`<ul>${ws.map(wishHtml).join("")}</ul>`:`<p class="muted">Todavía no ha añadido nada. Vuelve a mirar más tarde.</p>`}</section>`}).join("");
 }
 function orgHtml(){
-  const ids=Object.keys(members),n=ids.length;
-  return`<div class="card"><h3>Participantes (${n})</h3>${n?`<ul class="plain">${ids.map(id=>`<li><span>${esc(members[id].name)}</span>${id===adminId()?`<span class="muted">organizador</span>`:`<button class="link del" data-a="delmember" data-id="${esc(id)}">Quitar</button>`}</li>`).join("")}</ul>`:`<p class="muted">Aún no hay nadie.</p>`}</div>
-<div class="card"><h3>Sorteo</h3><p>${sorteo?"Sorteo hecho el "+new Date(sorteo.at).toLocaleDateString("es-ES")+".":"Aún no se ha hecho."} ${n<3?"Hacen falta al menos 3 participantes.":""}</p><button class="pri" data-a="hacer"${n<3?" disabled":""}>${sorteo?"Repetir sorteo":"Hacer sorteo"}</button> ${sorteo?`<button class="sec" data-a="anular">Anular sorteo</button>`:""}<p class="muted">Haz el sorteo cuando todos estén apuntados. Cada persona solo ve a quién le toca la suya. Si quitas a alguien después del sorteo, repítelo.</p></div>`;
+  const ids=Object.keys(members),n=ids.length,k=cfg.k||1,need=Math.max(3,k+1),nm=i=>esc(members[i]?members[i].name:i);
+  const opts=ids.map(i=>`<option value="${esc(i)}">${nm(i)}</option>`).join("");
+  const ps=(cfg.pairs||[]).filter(p=>p.split("|").every(i=>members[i]));
+  return`<div class="card"><h3>Participantes (${n})</h3>${n?`<ul class="plain">${ids.map(id=>`<li><span>${nm(id)}</span>${id===adminId()?`<span class="muted">organizador</span>`:`<button class="link del" data-a="delmember" data-id="${esc(id)}">Quitar</button>`}</li>`).join("")}</ul>`:`<p class="muted">Aún no hay nadie.</p>`}</div>
+<div class="card"><h3>Reglas del sorteo</h3>
+<label>Amigos invisibles por persona<select data-c="setk">${[1,2,3,4].map(v=>`<option${v===k?" selected":""}>${v}</option>`).join("")}</select></label>
+<label><input type="checkbox" data-c="setavoid"${cfg.avoid!==false?" checked":""}>Evitar regalos cruzados (si A regala a B, B no regala a A)</label>
+<h3>No se regalan entre sí (parejas, familia…)</h3>
+${ps.length?`<ul class="plain">${ps.map(p=>{const[a,b]=p.split("|");return`<li><span>${nm(a)} ↔ ${nm(b)}</span><button class="link del" data-a="delpair" data-id="${esc(p)}">Quitar</button></li>`}).join("")}</ul>`:`<p class="muted">Todavía no hay restricciones.</p>`}
+<label>Añadir restricción entre<select id="pa">${opts}</select><select id="pb">${opts}</select></label><button class="sec" data-a="addpair">Añadir</button>
+<p class="muted">Nadie se regala a sí mismo ni a quien tenga una restricción con él, y a nadie se le asigna la misma persona dos veces. Cada persona también recibirá regalo de ${k}. Si cambias algo, repite el sorteo.</p></div>
+<div class="card"><h3>Sorteo</h3><p>${sorteo?"Sorteo hecho el "+new Date(sorteo.at).toLocaleDateString("es-ES")+".":"Aún no se ha hecho."} ${n<need?"Hacen falta al menos "+need+" participantes.":""}</p><button class="pri" data-a="hacer"${n<need?" disabled":""}>${sorteo?"Repetir sorteo":"Hacer sorteo"}</button> ${sorteo?`<button class="sec" data-a="anular">Anular sorteo</button>`:""}<p class="muted">Cada persona solo ve a quién le toca la suya.</p></div>`;
 }
 const adminId=()=>{const i=Object.keys(members);i.sort((a,b)=>(members[a].at||0)-(members[b].at||0));return i[0]};
 const admin=()=>isRoot||(!!me&&me===adminId());
@@ -145,7 +178,7 @@ function fill(){
   if(nodb)return;
   if(view==="list")set("#wl",ready?listHtml():wait);
   if(view==="friend")set("#mine",ready?friendHtml():wait);
-  if(view==="org")set("#org",ready?orgHtml():wait);
+  if(view==="org"){const a=$("#pa"),b=$("#pb"),va=a&&a.value,vb=b&&b.value;set("#org",ready?orgHtml():wait);if(va&&$("#pa"))$("#pa").value=va;if(vb&&$("#pb"))$("#pb").value=vb}
 }
 
 /* ---------- acciones ---------- */
@@ -207,20 +240,32 @@ const A={
     say(sorteo?"Usuario quitado. Repite el sorteo para que nadie se quede sin pareja.":"Usuario quitado.");
   },
   async hacer(el){
-    const ids=Object.keys(members);
-    if(ids.length<3)return say("Hacen falta al menos 3 participantes.");
+    const ids=Object.keys(members),k=Math.max(1,cfg.k||1),need=Math.max(3,k+1);
+    if(ids.length<need)return say("Hacen falta al menos "+need+" participantes.");
     if(sorteo&&!sure(el,"hacer"))return;
-    for(let i=ids.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[ids[i],ids[j]]=[ids[j],ids[i]]}
-    const pairs={};ids.forEach((g,i)=>pairs[g]=ids[(i+1)%ids.length]);
-    await db.doc(P+"draw/main").set({pairs,at:Date.now()});
-    say("¡Sorteo hecho! Cada participante ya puede ver a quién le toca.");
+    const bad=new Set(cfg.pairs||[]),r=solve(ids,k,bad,cfg.avoid!==false);
+    if(!r){
+      const cand=ids.map(a=>[a,ids.filter(b=>b!==a&&!bad.has(a<b?a+"|"+b:b+"|"+a)).length]).filter(x=>x[1]<k);
+      return say(cand.length?"No es posible: "+cand.map(([a,c])=>members[a].name+" solo tendría "+c+" candidato(s)").join("; ")+". Quita restricciones o baja el número de regalos.":"Con estas restricciones no hay forma de repartirlo. Quita alguna o baja el número de regalos por persona.");
+    }
+    await db.doc(P+"draw/main").set({pairs:r.pairs,k,at:Date.now()});
+    say(r.cross?"Sorteo hecho, pero no se han podido evitar "+r.cross+" regalo(s) cruzado(s). Puedes repetirlo.":"¡Sorteo hecho! Cada participante ya puede ver a quién le toca.");
   },
+  async setk(el){await saveCfg({k:+el.value});say("Guardado. Repite el sorteo para aplicarlo.")},
+  async setavoid(el){await saveCfg({avoid:el.checked});say("Guardado. Repite el sorteo para aplicarlo.")},
+  async addpair(){
+    const a=$("#pa").value,b=$("#pb").value;if(!a||!b||a===b)return say("Elige dos personas distintas.");
+    const p=a<b?a+"|"+b:b+"|"+a,l=cfg.pairs||[];if(l.includes(p))return say("Esa restricción ya existe.");
+    await saveCfg({pairs:[...l,p]});say("Restricción añadida. Repite el sorteo para aplicarla.");
+  },
+  async delpair(el){await saveCfg({pairs:(cfg.pairs||[]).filter(p=>p!==el.dataset.id)})},
   async anular(el){if(!sure(el,"anular"))return;await db.doc(P+"draw/main").delete();say("Sorteo anulado.")}
 };
 async function run(a,el){try{await A[a](el)}catch(err){say("Algo ha fallado: "+(err&&(err.message||err.code)||"inténtalo de nuevo"))}}
 app.addEventListener("click",e=>{const el=e.target.closest("[data-a]");if(el&&!el.disabled)run(el.dataset.a,el)});
 app.addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.dataset&&e.target.dataset.enter)run(e.target.dataset.enter,e.target)});
 app.addEventListener("change",async e=>{
+  const c=e.target.dataset&&e.target.dataset.c;if(c){run(c,e.target);return}
   if(e.target.id!=="f")return;
   const f=e.target.files[0];img=null;set("#pv","");if(!f)return;
   try{img=await shrink(f);set("#pv",`<img class="thumb" src="${img}" alt="Vista previa">`)}catch(err){say("No se ha podido leer esa imagen.")}
@@ -251,6 +296,7 @@ async function boot(){
   db.collection(P+"members").onSnapshot(q=>{members={};q.docs.forEach(d=>members[d.id]=d.data());ld.m=1;fill()},er);
   db.collection(P+"wishes").onSnapshot(q=>{wishes=q.docs.map(d=>({...d.data(),id:d.id})).sort((a,b)=>(b.at||0)-(a.at||0));ld.w=1;fill()},er);
   db.doc(P+"draw/main").onSnapshot(q=>{sorteo=q.exists?q.data():null;ld.d=1;fill()},er);
+  db.doc(P+"draw/config").onSnapshot(q=>{cfg=q.exists?q.data():{};fill()},er);
 }
 window.addEventListener("hashchange",()=>location.reload());
 boot();
