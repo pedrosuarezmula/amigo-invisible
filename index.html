@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Amigo invisible</title>
+<style>
+:root{--bg:#fbf6ef;--card:#fff;--ink:#2a2420;--muted:#7a6e64;--line:#eadfd0;--acc:#b8302a;--onacc:#fff;--grn:#1f6b4a;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1b1715;--card:#26201d;--ink:#f3ebe3;--muted:#a99c90;--line:#3a312c;--acc:#e0564e;--onacc:#1b1715;--grn:#4fb98a;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#1b1715;--card:#26201d;--ink:#f3ebe3;--muted:#a99c90;--line:#3a312c;--acc:#e0564e;--onacc:#1b1715;--grn:#4fb98a;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:720px;margin:0 auto;padding:16px}
+header{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+h1{font-size:1.5rem;margin:.3em 0}h2{margin:.2em 0}h3{margin:.1em 0 .5em}
+nav{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 14px}
+.tab{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:7px 14px;font:inherit;cursor:pointer}
+.tab.on{background:var(--acc);color:var(--onacc);border-color:var(--acc)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+.center{text-align:center}.big{font-size:2.2rem;color:var(--acc);margin:.1em 0 .3em}
+label{display:block;font-size:.9rem;color:var(--muted);margin-bottom:10px}
+input,textarea,select{display:block;width:100%;margin-top:4px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit}
+button{font:inherit;cursor:pointer}
+.pri,.sec{border:0;border-radius:10px;padding:10px 18px;background:var(--acc);color:var(--onacc);font-weight:600}
+.sec{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.pri:disabled{opacity:.45;cursor:not-allowed}
+.link{background:none;border:0;color:var(--grn);padding:2px 6px;text-decoration:underline}
+.del{color:var(--acc)}
+.muted{color:var(--muted);font-size:.92rem}
+ul{list-style:none;margin:0;padding:0}
+.wish{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--line)}
+.wish:first-child{border-top:0}
+.wish>div{flex:1;min-width:0;overflow-wrap:anywhere}.wish p{margin:0 0 4px;white-space:pre-wrap}
+.wish img,.thumb{width:92px;height:92px;object-fit:cover;border-radius:10px;border:1px solid var(--line);margin-top:6px}
+.wish a{color:var(--grn)}
+.plain li{display:flex;justify-content:space-between;padding:6px 0;border-top:1px solid var(--line)}
+code{display:block;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);overflow-wrap:anywhere;user-select:all;font-size:.85rem;margin-bottom:8px}
+#msg{min-height:1.4em;color:var(--acc);font-weight:600}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script>
+/* ===== CONFIGURACIÓN: sustituye este objeto por el firebaseConfig de tu proyecto (consola de Firebase) ===== */
+const FIREBASE_CONFIG={  apiKey: "AIzaSyBorKTzz6zH7Nt46MlL7X2i8pfAezMM7us",
+  authDomain: "amigo-invisible-b6399.firebaseapp.com",
+  projectId: "amigo-invisible-b6399",
+  storageBucket: "amigo-invisible-b6399.firebasestorage.app",
+  messagingSenderId: "1050140499363",
+  appId: "1:1050140499363:web:57be6fb247c90a90168e16"
+};
+/* ================================================================================================= */
+const app=document.getElementById("app"),$=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const slug=n=>n.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+let db=null,user=null,org=false,nodb=false,view="login",me=null,reveal=false,armed=null,img=null,grace=0;
+let gid="",P="",grp=null,bad=false,isRoot=false,auth=null,groups=[];
+const code=()=>{const b=new Uint8Array(12);crypto.getRandomValues(b);return[...b].map(x=>(x%36).toString(36)).join("")};
+let members={},wishes=[],sorteo=null,ld={m:0,w:0,d:0};
+const save=()=>{try{me?localStorage.setItem("ai.me."+gid,me):localStorage.removeItem("ai.me."+gid)}catch(e){}};
+const say=t=>{const m=$("#msg");if(m)m.textContent=t};
+const set=(s,h)=>{const e=$(s);if(e)e.innerHTML=h};
+const host=u=>{try{return new URL(u).hostname.replace(/^www\./,"")}catch(e){return u}};
+async function hash(pin,id){const s=id+":"+pin;try{const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s));return[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("")}catch(e){let h=5381;for(const c of s)h=((h<<5)+h+c.charCodeAt(0))|0;return"f"+h}}
+function sure(el,key){if(armed===key){armed=null;return true}armed=key;const t=el.textContent;el.textContent="¿Seguro?";setTimeout(()=>{if(armed===key){armed=null;el.textContent=t}},3000);return false}
+const shrink=f=>new Promise((ok,ko)=>{const r=new FileReader();r.onerror=ko;r.onload=()=>{const im=new Image();im.onerror=ko;im.onload=()=>{const k=Math.min(1,640/Math.max(im.width,im.height)),c=document.createElement("canvas");c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);const x=c.getContext("2d");x.fillStyle="#fff";x.fillRect(0,0,c.width,c.height);x.drawImage(im,0,0,c.width,c.height);let q=.72,o=c.toDataURL("image/jpeg",q);while(o.length>180000&&q>.3){q-=.15;o=c.toDataURL("image/jpeg",q)}ok(o)};im.src=r.result};r.readAsDataURL(f)});
+
+/* ---------- vistas ---------- */
+function rootSkel(){
+  if(!isRoot)return`<div class="card"><h2>Acceso Root</h2><label>Correo<input id="n" type="email" autocomplete="username" data-enter="rootin"></label><label>Contraseña<input id="p" type="password" autocomplete="current-password" data-enter="rootin"></label><button class="pri" data-a="rootin">Entrar</button></div>`;
+  const cs=[["#d6453d","Rojo"],["#2e8b62","Verde"],["#3d7ad6","Azul"],["#9a5ccc","Morado"]];
+  return`<div class="card"><h3>Crear grupo</h3><label>Nombre del grupo<input id="gn" maxlength="40" placeholder="Los de la uni"></label><label>Color<select id="gc">${cs.map(([v,l])=>`<option value="${v}">${l}</option>`).join("")}</select></label><button class="pri" data-a="mkgroup">Crear grupo</button></div><div id="rl"></div><p><button class="link" data-a="rootout">Cerrar sesión Root</button></p>`;
+}
+function groupsHtml(){
+  if(!ld.g)return`<p class="muted">Cargando…</p>`;
+  if(!groups.length)return`<p class="muted">Aún no hay grupos.</p>`;
+  return groups.map(g=>{const u=location.origin+location.pathname+"#"+g.id;return`<section class="card"><h3>${esc(g.name)}</h3><code>${esc(u)}</code><button class="sec" data-a="copy" data-id="${esc(u)}">Copiar enlace</button> <a class="link" href="#${esc(g.id)}" target="_blank" rel="noopener">Abrir</a> <button class="link del" data-a="delgroup" data-id="${esc(g.id)}">Eliminar</button></section>`}).join("");
+}
+function skeleton(v){
+  if(!nodb){
+    if(gid==="root")return rootSkel();
+    if(!gid)return`<div class="card center"><p>Para entrar necesitas el enlace de tu grupo de amigos. Pídeselo a tu organizador.</p><p class="muted"><a class="link" href="#root">Acceso Root</a></p></div>`;
+    if(bad)return`<div class="card"><p>Este grupo no existe o el enlace no es correcto.</p></div>`;
+  }
+  if(nodb)return`<div class="card"><p>No se ha podido conectar con la base de datos. Comprueba que has pegado tu configuración de Firebase en el archivo index.html.</p></div>`;
+  if(v==="login")return`<div class="card"><h2>Entrar</h2><label>Nombre<input id="n" autocomplete="username" data-enter="login"></label><label>PIN o contraseña<input id="p" type="password" autocomplete="current-password" data-enter="login"></label><button class="pri" data-a="login">Entrar</button><p class="muted" id="hint"></p></div>`;
+  if(v==="register")return`<div class="card"><h2>Crear usuario</h2><label>Nombre (el que verán los demás)<input id="n" autocomplete="off"></label><label>PIN o contraseña (mínimo 4 caracteres)<input id="p" type="password" autocomplete="new-password" data-enter="register"></label><button class="pri" data-a="register">Crear usuario</button><p class="muted" id="rhint"></p></div>`;
+  if(v==="list")return`<div class="card"><h3>Añadir un deseo a mi lista</h3><label>¿Qué te gustaría que te regalaran?<textarea id="t" rows="2" maxlength="500" placeholder="Un libro, unas zapatillas del 42…"></textarea></label><label>Enlace (opcional)<input id="l" type="url" placeholder="https://…"></label><label>Foto (opcional)<input id="f" type="file" accept="image/*"></label><div id="pv"></div><button class="pri" data-a="addwish">Añadir a mi lista</button></div><div id="wl"></div>`;
+  if(v==="friend")return`<div id="mine"></div>`;
+  return`<div id="org"></div>`;
+}
+function go(v){
+  view=v;reveal=false;img=null;
+  app.innerHTML=`<div class="wrap"><header><h1>🎁 ${esc(grp&&grp.name||"Amigo invisible")}</h1><span class="muted">${me?`<span id="hi"></span> <button class="link" data-a="logout">Salir</button>`:""}</span></header><nav id="nav"></nav><main>${skeleton(v)}</main><p id="msg" role="status"></p></div>`;
+  fill();
+}
+function wishHtml(w){
+  const okImg=w.img&&/^data:image\/jpeg;base64,[A-Za-z0-9+\/=]+$/.test(w.img),okLink=w.link&&/^https?:\/\//i.test(w.link);
+  return`<li class="wish"><div>${w.text?`<p>${esc(w.text)}</p>`:""}${okLink?`<a href="${esc(w.link)}" target="_blank" rel="noopener noreferrer">🔗 ${esc(host(w.link))}</a>`:""}${okImg?`<br><img src="${w.img}" alt="Foto del regalo">`:""}</div>${w.m===me?`<button class="link del" data-a="delwish" data-id="${esc(w.id)}">Borrar</button>`:""}</li>`;
+}
+const wishesOf=id=>wishes.filter(w=>w.m===id);
+function listHtml(){
+  const ids=Object.keys(members).sort((a,b)=>a===me?-1:b===me?1:members[a].name.localeCompare(members[b].name,"es"));
+  if(!ids.length)return`<p class="muted">Todavía no hay participantes.</p>`;
+  return ids.map(id=>{const ws=wishesOf(id);return`<section class="card"><h3>${esc(members[id].name)}${id===me?" (tú)":""}</h3>${ws.length?`<ul>${ws.map(wishHtml).join("")}</ul>`:`<p class="muted">Aún no ha añadido ningún deseo.</p>`}</section>`}).join("");
+}
+function friendHtml(){
+  if(!sorteo)return`<div class="card"><p>Todavía no se ha hecho el sorteo. Cuando el organizador lo haga, podrás descubrir aquí a quién le regalas.</p></div>`;
+  const r=sorteo.pairs&&sorteo.pairs[me];
+  if(!r||!members[r])return`<div class="card"><p>No apareces en el sorteo (quizá te creaste el usuario después de hacerlo). Habla con el organizador.</p></div>`;
+  if(!reveal)return`<div class="card center"><p>Tu amigo invisible te está esperando…</p><button class="pri" data-a="reveal">Descubrir a quién le regalo</button><p class="muted">Asegúrate de que nadie mira tu pantalla 👀</p></div>`;
+  const ws=wishesOf(r);
+  return`<div class="card center"><p class="muted">Tienes que regalarle a</p><h2 class="big">${esc(members[r].name)}</h2><button class="link" data-a="hide">Ocultar</button></div><section class="card"><h3>Lo que le haría ilusión</h3>${ws.length?`<ul>${ws.map(wishHtml).join("")}</ul>`:`<p class="muted">Todavía no ha añadido nada. Vuelve a mirar más tarde.</p>`}</section>`;
+}
+function orgHtml(){
+  const ids=Object.keys(members),n=ids.length;
+  return`<div class="card"><h3>Participantes (${n})</h3>${n?`<ul class="plain">${ids.map(id=>`<li><span>${esc(members[id].name)}</span>${id===adminId()?`<span class="muted">organizador</span>`:`<button class="link del" data-a="delmember" data-id="${esc(id)}">Quitar</button>`}</li>`).join("")}</ul>`:`<p class="muted">Aún no hay nadie.</p>`}</div>
+<div class="card"><h3>Sorteo</h3><p>${sorteo?"Sorteo hecho el "+new Date(sorteo.at).toLocaleDateString("es-ES")+".":"Aún no se ha hecho."} ${n<3?"Hacen falta al menos 3 participantes.":""}</p><button class="pri" data-a="hacer"${n<3?" disabled":""}>${sorteo?"Repetir sorteo":"Hacer sorteo"}</button> ${sorteo?`<button class="sec" data-a="anular">Anular sorteo</button>`:""}<p class="muted">Haz el sorteo cuando todos estén apuntados. Cada persona solo ve a quién le toca la suya. Si quitas a alguien después del sorteo, repítelo.</p></div>`;
+}
+const adminId=()=>{const i=Object.keys(members);i.sort((a,b)=>(members[a].at||0)-(members[b].at||0));return i[0]};
+const admin=()=>isRoot||(!!me&&me===adminId());
+const first=()=>!!ld.m&&!Object.keys(members).length;
+function navHtml(){
+  if(!gid||gid==="root"||bad)return"";
+  const t=me?[["list","Lista de regalos"],["friend","Mi amigo invisible"]]:[["login","Entrar"]];
+  if(admin())t.push(["register","Crear usuario"],["org","Organizador"]);
+  else if(!me&&first())t.push(["register","Crear usuario"]);
+  return t.map(([k,l])=>`<button class="tab${k===view?" on":""}" data-a="go" data-id="${k}">${l}</button>`).join("");
+}
+function fill(){
+  if(gid==="root"){set("#rl",groupsHtml());return}
+  if(me&&ld.m&&!members[me]&&Date.now()>grace){me=null;save();go("login");return}
+  if(ld.m&&Date.now()>grace){
+    const ok=view==="register"?(admin()||(!me&&first())):view==="org"?admin():true;
+    if(!ok){go(me?"list":"login");return}
+  }
+  set("#hi",me&&members[me]?"Hola, "+esc(members[me].name):"");
+  set("#nav",navHtml());
+  if(view==="login")set("#hint",first()?"Todavía no hay ningún usuario. Ve a «Crear usuario»: la primera persona en registrarse será el organizador.":"");
+  if(view==="register")set("#rhint",first()?"Serás el organizador: solo tú podrás crear usuarios y hacer el sorteo. Apunta tu PIN, no se puede recuperar.":"Crea aquí el usuario de cada participante y dile su nombre y su PIN. Si alguien pierde su PIN, quítalo en Organizador y vuelve a crearlo.");
+  const ready=ld.m&&ld.w&&ld.d,wait=`<p class="muted">Cargando…</p>`;
+  if(nodb)return;
+  if(view==="list")set("#wl",ready?listHtml():wait);
+  if(view==="friend")set("#mine",ready?friendHtml():wait);
+  if(view==="org")set("#org",ready?orgHtml():wait);
+}
+
+/* ---------- acciones ---------- */
+const A={
+  go:el=>go(el.dataset.id),
+  async rootin(){
+    const e=$("#n").value.trim(),p=$("#p").value;
+    if(!e||!p)return say("Escribe tu correo y tu contraseña.");
+    try{await auth.signInWithEmailAndPassword(e,p)}catch(x){say("Correo o contraseña incorrectos.")}
+  },
+  rootout:()=>auth.signOut(),
+  async mkgroup(){
+    const name=$("#gn").value.trim();if(name.length<2)return say("Pon un nombre al grupo.");
+    await db.doc("groups/"+code()).set({name,color:$("#gc").value,at:Date.now()});
+    $("#gn").value="";say("Grupo creado ✔");
+  },
+  async copy(el){try{await navigator.clipboard.writeText(el.dataset.id);say("Enlace copiado ✔")}catch(e){say("Selecciona el enlace y cópialo a mano.")}},
+  async delgroup(el){
+    const id=el.dataset.id;if(!sure(el,"g"+id))return;
+    for(const c of["members","wishes","draw"]){const q=await db.collection("groups/"+id+"/"+c).get();for(const d of q.docs)await d.ref.delete()}
+    await db.doc("groups/"+id).delete();say("Grupo eliminado.");
+  },
+  logout:()=>{me=null;save();go("login")},
+  reveal:()=>{reveal=true;fill()},
+  hide:()=>{reveal=false;fill()},
+  async login(){
+    const pin=$("#p").value,id=slug($("#n").value);
+    if(!id||!pin)return say("Escribe tu nombre y tu PIN.");
+    const s=await db.doc(P+"members/"+id).get();
+    if(!s.exists||s.data().h!==await hash(pin,id))return say("Nombre o PIN incorrectos.");
+    me=id;grace=Date.now()+8000;save();go("list");
+  },
+  async register(){
+    const name=$("#n").value.trim().replace(/\s+/g," "),pin=$("#p").value,id=slug(name);
+    if(name.length<2||!id)return say("Escribe un nombre válido.");
+    if(pin.length<4)return say("El PIN debe tener al menos 4 caracteres.");
+    const ref=db.doc(P+"members/"+id);
+    if((await ref.get()).exists)return say("Ya existe alguien con ese nombre. Prueba con otro (por ejemplo, añade la inicial del apellido).");
+    const adm=first();
+    if(!adm&&!admin())return say("Solo el organizador puede crear usuarios.");
+    const d={name,h:await hash(pin,id),at:Date.now()};
+    await ref.set(d);
+    if(adm){members[id]=d;me=id;grace=Date.now()+8000;save();go("list");return}
+    $("#n").value="";$("#p").value="";say("Usuario «"+name+"» creado ✔");
+  },
+  async addwish(){
+    const text=$("#t").value.trim();let link=$("#l").value.trim();
+    if(!text&&!link&&!img)return say("Escribe algo, añade un enlace o una foto.");
+    if(link&&!/^https?:\/\//i.test(link))link="https://"+link;
+    const d={m:me,text,link,at:Date.now()};if(img)d.img=img;
+    await db.collection(P+"wishes").add(d);
+    $("#t").value="";$("#l").value="";$("#f").value="";set("#pv","");img=null;say("Añadido a tu lista ✔");
+  },
+  async delwish(el){if(!sure(el,"w"+el.dataset.id))return;await db.doc(P+"wishes/"+el.dataset.id).delete()},
+  async delmember(el){
+    const id=el.dataset.id;if(!sure(el,"m"+id))return;
+    for(const w of wishesOf(id))await db.doc(P+"wishes/"+w.id).delete();
+    await db.doc(P+"members/"+id).delete();
+    say(sorteo?"Usuario quitado. Repite el sorteo para que nadie se quede sin pareja.":"Usuario quitado.");
+  },
+  async hacer(el){
+    const ids=Object.keys(members);
+    if(ids.length<3)return say("Hacen falta al menos 3 participantes.");
+    if(sorteo&&!sure(el,"hacer"))return;
+    for(let i=ids.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[ids[i],ids[j]]=[ids[j],ids[i]]}
+    const pairs={};ids.forEach((g,i)=>pairs[g]=ids[(i+1)%ids.length]);
+    await db.doc(P+"draw/main").set({pairs,at:Date.now()});
+    say("¡Sorteo hecho! Cada participante ya puede ver a quién le toca.");
+  },
+  async anular(el){if(!sure(el,"anular"))return;await db.doc(P+"draw/main").delete();say("Sorteo anulado.")}
+};
+async function run(a,el){try{await A[a](el)}catch(err){say("Algo ha fallado: "+(err&&(err.message||err.code)||"inténtalo de nuevo"))}}
+app.addEventListener("click",e=>{const el=e.target.closest("[data-a]");if(el&&!el.disabled)run(el.dataset.a,el)});
+app.addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.dataset&&e.target.dataset.enter)run(e.target.dataset.enter,e.target)});
+app.addEventListener("change",async e=>{
+  if(e.target.id!=="f")return;
+  const f=e.target.files[0];img=null;set("#pv","");if(!f)return;
+  try{img=await shrink(f);set("#pv",`<img class="thumb" src="${img}" alt="Vista previa">`)}catch(err){say("No se ha podido leer esa imagen.")}
+});
+
+/* ---------- arranque ---------- */
+async function boot(){
+  app.innerHTML='<div class="wrap"><p class="muted">Cargando…</p></div>';
+  const er=e=>say("Error de conexión: "+(e&&(e.message||e.code)));
+  try{if(FIREBASE_CONFIG.projectId==="PEGA_AQUI")throw new Error("sin configurar");firebase.initializeApp(FIREBASE_CONFIG);db=firebase.firestore();auth=firebase.auth()}catch(e){console.error(e)}
+  if(!db){nodb=true;go("login");return}
+  gid=location.hash.slice(1);
+  if(!/^[A-Za-z0-9_~.-]{3,40}$/.test(gid))gid="";
+  if(!gid){go("login");return}
+  if(gid==="root"){
+    grp={name:"Panel Root"};let un=null;
+    auth.onAuthStateChanged(u=>{isRoot=!!u;if(un){un();un=null}
+      if(isRoot)un=db.collection("groups").orderBy("at","desc").onSnapshot(q=>{groups=q.docs.map(d=>({...d.data(),id:d.id}));ld.g=1;fill()},er);
+      go("root")});
+    return;
+  }
+  try{const g=await db.doc("groups/"+gid).get();if(!g.exists){bad=true;go("login");return}grp=g.data()}catch(e){nodb=true;go("login");return}
+  P="groups/"+gid+"/";document.title=String(grp.name||"")+" · Amigo invisible";
+  if(/^#[0-9a-f]{6}$/i.test(grp.color)){const r=document.documentElement.style;r.setProperty("--acc",grp.color);r.setProperty("--onacc","#fff")}
+  try{me=localStorage.getItem("ai.me."+gid)}catch(e){}
+  auth.onAuthStateChanged(u=>{isRoot=!!u;fill()});
+  go(me?"list":"login");
+  db.collection(P+"members").onSnapshot(q=>{members={};q.docs.forEach(d=>members[d.id]=d.data());ld.m=1;fill()},er);
+  db.collection(P+"wishes").onSnapshot(q=>{wishes=q.docs.map(d=>({...d.data(),id:d.id})).sort((a,b)=>(b.at||0)-(a.at||0));ld.w=1;fill()},er);
+  db.doc(P+"draw/main").onSnapshot(q=>{sorteo=q.exists?q.data():null;ld.d=1;fill()},er);
+}
+window.addEventListener("hashchange",()=>location.reload());
+boot();
+</script>
+</body>
+</html>
